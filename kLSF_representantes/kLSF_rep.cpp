@@ -112,9 +112,7 @@ ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVa
 	}
 	//std::cout << "Solution values:";
 	for (volatile int j = 0; j < size; ++j) { //using colors of original graph
-		//std::cout <<"Z["<<i<<"]= "<< getValue(Z[i]) << std::endl;
-		double z = getValue(Z[j]);
-		//std::cout <<" "<< z << std::endl;
+
 		if (std::abs(getValue(Z[j])-1) <= 1e-3) {
 			//std::cout << "set " << j<<std::endl;
 			temp.set(j);
@@ -136,46 +134,6 @@ ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVa
 		//std::cout << (newexpr >= tmp) << std::endl;
 		add(newexpr>=tmp);
 		newexpr.end();
-
-		/*for (int u = 0; u < n_vertices; ++u) {
-			if (std::abs(getValue(Y[u]) - 1) <= 1e-3) {
-				for (int v = u + 1; v < n_vertices; ++v) {
-					//std::cout << "X[" << u <<","<<v<< "]= " << getValue(X[u][v]) << std::endl;
-					if (std::abs(getValue(X[u][v]) - 1) <= 1e-3) {
-						db temp1(size);
-						volatile int s, t;
-						IloExpr expr(getEnv());
-						IloExpr expr2(getEnv());
-						if (components[u] != components[v]) {
-							std::tie(it, end) = edges(g);
-							while (it != end) {
-								s = source(*it, g);
-								t = target(*it, g);
-								if (components[s] != components[t]) {
-									if (components[s] == components[u] || components[t] == components[u]) {
-										temp1.set(colors[*it]);
-									}
-								}
-								++it;
-							}
-							for (int i = 0; i < Z.getSize(); ++i) {
-								if (temp.test(i))expr += Z[i];
-								//if (temp1.test(i))expr2 += Z[i];
-							}
-							//new cut peharps faster
-							//std::cout << (expr <= k - X[u][v]) << std::endl;
-							//std::cout << (expr2 >= X[u][v]) << std::endl;
-							add(expr <= k - X[u][v]).end();
-							//add(expr2 >= X[u][v]).end();
-							expr.end();
-							expr2.end();
-
-						}
-
-					}
-				}
-			}
-		}*/
 	}
 }
 	
@@ -246,25 +204,6 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 	mod.add(exptreecut >= N);
 	exptreecut.end();
 
-	/*new constraint prohibition of usage of edges of diferent components(representatives) not completed
-	IloExpr expdcomp(env);
-	std::tie(it, end) = edges(g);
-	while (it != end) {
-		int u, v;
-		u = source(*it, g);
-		v = target(*it, g);
-		if (u > v) std::swap(u, v);
-		expdcomp += Z[colors[*it]] - Y[u] - Y[v];
-		for (int i = 1; i < u; ++i) {
-			expdcomp -= X[i][u];
-		}
-		for (int i = u + 1; i < u; ++i) {
-			expdcomp -= X[i][u];
-		}
-
-		++it;
-	}
-	expdcomp.end();*/
 	//forth constraint
 	IloExpr texp(env);
 	for (int i = 0; i < n_colors; ++i) {
@@ -288,13 +227,7 @@ void solveModel(int n_vertices, int n_colors, int k, Graph &g) {
 		IloCplex cplex(model);
 		cplex.exportModel("kSLF_rep.lp"); // good to see if the model is correct
 										  //cross your fingers
-		//cplex.setParam(IloCplex::Param::Preprocessing::Presolve, 0);
-		//cplex.setParam(IloCplex::Param::MIP::Display, 5);
-		//cplex.setParam(IloCplex::Param::Tune::Display, 3);
-		//cplex.setParam(IloCplex::Param::Simplex::Display, 2);
-		//cplex.setParam(IloCplex::Param::Preprocessing::Dual, 0);
-		//cplex.setParam(IloCplex::PreInd, 0);
-		//cplex.use(MyUserCall(env, Z, Y, X, k, g));
+		cplex.setParam(IloCplex::Param::Preprocessing::Presolve, 0);
 		cplex.use(MyLazyCall(env, Z, Y, X,k, g));
 		cplex.setParam(IloCplex::Param::Threads, 4);//n threads
 		cplex.solve();
@@ -388,12 +321,6 @@ int main(int argc, const char *argv[])
 				n_colors = stoi(vecI[2]);
 				std::cout << vecI[3] << std::endl;
 				int k = stoi(vecI[3]);
-				//add edges to super source vertex. remember!!!
-				//vertex_t u = add_vertex(g);
-				//n_vertices++;
-				//for (int i = 0; i < n_vertices - 1; ++i) boost::add_edge(u, i, property<edge_color_t, int>(n_colors++), g);
-				//std::tie(it, end) = boost::edges(g);
-				//print_edges(it, end, g);
 				solveModel(n_vertices, n_colors, k, g);
 			}
 			else {
