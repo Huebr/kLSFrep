@@ -94,88 +94,54 @@ property_map<graph_t, edge_color_t>::type get_colors(Graph &g) {
 //basic definitions
 typedef IloArray<IloBoolVarArray> IloVarMatrix;
 
-/*ILOUSERCUTCALLBACK5(MyUserCall, IloBoolVarArray, Z, IloBoolVarArray, Y, IloVarMatrix, X, int, k, graph_t, g) {
+
+//cuts 
+ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVarMatrix,X ,int,k,graph_t&,g ) {
 	int size = Z.getSize();
 	int n_vertices = Y.getSize();
 	db temp(size);
 	int n_comp_sol = 0;
 	std::vector<int> components(num_vertices(g));
 	auto colors = get_colors(g);
+	//std::cout << "add lazy cut: " << std::endl;
+	volatile float y, z, x;
 	graph_traits<graph_t>::edge_iterator it, end;
 	for (int i = 0; i < n_vertices; ++i) { //using colors of original graph
-		if (getValue(Y[i]) == 1) n_comp_sol++;
+		//std::cout << "Y[" << i << "]= " << getValue(Y[i]) << std::endl;
+		if (std::abs(getValue(Y[i]) - 1) <= 1e-3) n_comp_sol++;
 	}
-	for (int i = 0; i < size; ++i) { //using colors of original graph
-		if (getValue(Z[i]) == 1) temp.set(i);
-	}
-	//std::cout << " user cutting" << std::endl;
-	int num_c = get_components(g, temp, components);//vertex 0 isolated
-	//std::cout << "add user cut: " << std::endl;
-	if (num_c != n_comp_sol) {
-		for (int u = 0; u < n_vertices; ++u) {
-			if (getValue(Y[u]) == 1) {
-				for (int v = u + 1; v < n_vertices; ++v) {
-					if (getValue(X[u][v]) == 1) {
-						db temp1(size);
-						volatile int s, t;
-						IloExpr expr(getEnv());
-						//IloExpr expr2(getEnv());
-						if (components[u] != components[v]) {
-							std::tie(it, end) = edges(g);
-							while (it != end) {
-							s = source(*it, g);
-							t = target(*it, g);
-							if (components[s] != components[t]) {
-							if (components[s] == components[u] || components[t] == components[u]) {
-							temp1.set(colors[*it]);
-							}
-							}
-							++it;
-							}
-							for (int i = 0; i < Z.getSize(); ++i) {
-								if (temp.test(i))expr += Z[i];
-								//if (temp1.test(i))expr2 += Z[i];
-							}
-							//std::cout << (expr <= k - X[u][v]) << std::endl;
-							add(expr <= k - X[u][v]).end();
-							//add(expr2 >= X[u][v]).end();
-							expr.end();
-							//expr2.end();
-
-						}
-
-					}
-				}
-			}
+	//std::cout << "Solution values:";
+	for (volatile int j = 0; j < size; ++j) { //using colors of original graph
+		//std::cout <<"Z["<<i<<"]= "<< getValue(Z[i]) << std::endl;
+		double z = getValue(Z[j]);
+		//std::cout <<" "<< z << std::endl;
+		if (std::abs(getValue(Z[j])-1) <= 1e-3) {
+			//std::cout << "set " << j<<std::endl;
+			temp.set(j);
 		}
 	}
-}*/
-//cuts 
-ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVarMatrix,X ,int,k,graph_t,g ) {
-	int size = Z.getSize();
-	int n_vertices = Y.getSize();
-	db temp(size);
-	int n_comp_sol = 0;
-	std::vector<int> components(num_vertices(g));
-	auto colors = get_colors(g);
-	std::cout << "add lazy cut: " << std::endl;
-	graph_traits<graph_t>::edge_iterator it, end;
-	for (int i = 0; i < n_vertices; ++i) { //using colors of original graph
-		std::cout << "Y[" << i << "]= " << getValue(Y[i]) << std::endl;
-		if (getValue(Y[i])==1) n_comp_sol++;
-	}
-	for (int i = 0; i < size; ++i) { //using colors of original graph
-		std::cout <<"Z["<<i<<"]= "<< getValue(Z[i]) << std::endl;
-		if (getValue(Z[i])==1) temp.set(i);
-	}
+	//std::cout<<std::endl;
 	//std::cout << " user cutting" << std::endl;
 	int num_c = get_components(g, temp, components);//vertex 0 isolated
+	if (num_c != n_comp_sol) {
+		//new cut
+		IloExpr newexpr(getEnv());
+		for (int i = 0; i < n_vertices; ++i) { 
+			newexpr += Y[i];
+		}
+		for (int i = 0; i < Z.getSize(); ++i) {
+			if (temp.test(i))newexpr -= num_c*Z[i];
+		}
+		int tmp = -num_c * k + num_c;
+		//std::cout << (newexpr >= tmp) << std::endl;
+		add(newexpr>=tmp);
+		newexpr.end();
 
-	for (int u = 0; u < n_vertices; ++u) {
-			if (getValue(Y[u])==1) {
+		/*for (int u = 0; u < n_vertices; ++u) {
+			if (std::abs(getValue(Y[u]) - 1) <= 1e-3) {
 				for (int v = u + 1; v < n_vertices; ++v) {
-					std::cout << "X[" << u <<","<<v<< "]= " << getValue(X[u][v]) << std::endl;
-					if (getValue(X[u][v])>0) {
+					//std::cout << "X[" << u <<","<<v<< "]= " << getValue(X[u][v]) << std::endl;
+					if (std::abs(getValue(X[u][v]) - 1) <= 1e-3) {
 						db temp1(size);
 						volatile int s, t;
 						IloExpr expr(getEnv());
@@ -186,20 +152,21 @@ ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVa
 								s = source(*it, g);
 								t = target(*it, g);
 								if (components[s] != components[t]) {
-								if (components[s] == components[u] || components[t] == components[u]) {
-									temp1.set(colors[*it]);
+									if (components[s] == components[u] || components[t] == components[u]) {
+										temp1.set(colors[*it]);
+									}
 								}
-							}
-							++it;
+								++it;
 							}
 							for (int i = 0; i < Z.getSize(); ++i) {
 								if (temp.test(i))expr += Z[i];
-								if (temp1.test(i))expr2 += Z[i];
+								//if (temp1.test(i))expr2 += Z[i];
 							}
-							std::cout << (expr <= k - X[u][v]) << std::endl;
-							std::cout << (expr2 >= X[u][v]) << std::endl;
+							//new cut peharps faster
+							//std::cout << (expr <= k - X[u][v]) << std::endl;
+							//std::cout << (expr2 >= X[u][v]) << std::endl;
 							add(expr <= k - X[u][v]).end();
-							add(expr2 >= X[u][v]).end();
+							//add(expr2 >= X[u][v]).end();
 							expr.end();
 							expr2.end();
 
@@ -208,8 +175,10 @@ ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVa
 					}
 				}
 			}
+		}*/
 	}
 }
+	
 
 
 template<class Graph>
@@ -226,6 +195,7 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 		Y[i].setName(("y" + std::to_string(i)).c_str());
 	}
 	mod.add(IloMinimize(env, exp));
+	//mod.add(exp>=2);
 	exp.end();
 
 	for (int i = 0; i < n_vertices; ++i) {
@@ -250,10 +220,11 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 	//second constraint
 	IloExpr e2(env);
 	for (int u = 0; u < n_vertices; ++u) {
-		for (int v = u + 1; v<n_vertices; ++v) e2 += X[u][v];
+		for (int v = 0; v<u; ++v) e2 += X[v][u];
+		e2 += Y[u];
+		mod.add(e2 == 1);
+		e2.clear();
 	}
-	for (int u = 0; u < n_vertices; ++u) e2 += Y[u];
-	mod.add(e2 == n_vertices);
 	e2.end();
 
 	//third constraint
@@ -299,7 +270,7 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 	for (int i = 0; i < n_colors; ++i) {
 		texp += Z[i];
 	}
-	mod.add(texp <= k);
+	mod.add(texp == k);
 	texp.end();
 
 }
@@ -325,6 +296,7 @@ void solveModel(int n_vertices, int n_colors, int k, Graph &g) {
 		//cplex.setParam(IloCplex::PreInd, 0);
 		//cplex.use(MyUserCall(env, Z, Y, X, k, g));
 		cplex.use(MyLazyCall(env, Z, Y, X,k, g));
+		cplex.setParam(IloCplex::Param::Threads, 4);//n threads
 		cplex.solve();
 		cplex.out() << "solution status = " << cplex.getStatus() << endl;
 
