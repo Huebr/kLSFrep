@@ -13,6 +13,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/graph/filtered_graph.hpp>
 #include <boost/exception/all.hpp>
+#include <unordered_set>
 #include <exception>
 #include <vector>
 ILOSTLBEGIN //initialization make vs work properly
@@ -87,15 +88,119 @@ property_map<graph_t, edge_color_t>::type get_colors(Graph &g) {
 	//make color type generic
 	return colors;
 }
+int root(int current, std::vector<int> &parent) {
+	while (parent[current] != current) {
+		current = parent[current];
+	}
+	return current;
+}
 
+
+template<class Graph>
+int max_reduce(Graph &g, int n_curr, int n_colors, std::vector<int> &comp, int label) {
+	std::vector<int> parent(n_curr), level(n_curr);
+	volatile int comp_a, comp_b; //so i could debug dont know why.
+	int result;
+	for (int i = 0; i < n_curr; ++i) {
+		parent[i] = i;
+		level[i] = 0;
+	}
+	result = 0;
+
+	typedef typename property_map<Graph, edge_color_t>::type EdgeColorMap;
+	typedef filtered_graph<Graph, valid_edge_color<EdgeColorMap, db> > fg;
+	typedef typename fg::edge_iterator eit;
+	eit it, end;
+	db mask(n_colors);
+	mask.set(label);
+	valid_edge_color<EdgeColorMap, db> filter(get(edge_color, g), mask);
+	fg G(g, filter);
+	std::tie(it, end) = boost::edges(G);
+
+	while (it != end) {
+		comp_a = comp[source(*it, G)];
+		comp_b = comp[target(*it, G)];
+		if (comp_a != comp_b) {
+			volatile int root_a, root_b;
+			root_a = root(comp_a, parent);
+			root_b = root(comp_b, parent);
+			if (root(comp_a, parent) != root(comp_b, parent)) {
+				if (level[root(comp_a, parent)] > level[root(comp_b, parent)]) parent[root(comp_b, parent)] = root(comp_a, parent);
+				else {
+					if (level[root(comp_a, parent)] == level[root(comp_b, parent)]) {
+						level[root(comp_b, parent)]++;
+					}
+					parent[root(comp_a, parent)] = root(comp_b, parent);
+				}
+				result++;
+			}
+		}
+		++it;
+	}
+	return result;
+}
 
 //Callbacks new to me new to you let god save my soul
 
 //basic definitions
 typedef IloArray<IloBoolVarArray> IloVarMatrix;
 
-
+ILOUSERCUTCALLBACK5(MyUserCall, IloBoolVarArray, Z, IloBoolVarArray, Y, IloVarMatrix, X, int, k, graph_t&, g) {
 //cuts 
+	int size = Z.getSize();
+	int n_vertices = Y.getSize();
+	db temp(size);
+	int n_comp_sol = 0;
+	std::vector<int> components(num_vertices(g));
+	auto colors = get_colors(g);
+	//std::cout << "add lazy cut: " << std::endl;
+	volatile float y, z, x;
+	graph_traits<graph_t>::edge_iterator it, end;
+	//std::cout << "Solution values:";
+	for (volatile int j = 0; j < size; ++j) { //using colors of original graph
+
+		if (getValue(Z[j])>=0.5&&temp.count()<k) {
+			//std::cout << "set " << j<<std::endl;
+			temp.set(j);
+		}
+	}
+	//std::cout<<std::endl;
+	//std::cout << " user cutting" << std::endl;
+	int num_c = get_components(g, temp, components);//vertex 0 isolated
+	int max = 0;
+	if (k>temp.count()) {
+		std::vector<int> tmp(k - temp.count());
+		std::vector<int> tmp2(k - temp.count());
+		for (int i = 0; i < size; ++i) { // need to consider all labels undecided
+			if (!temp.test(i)) {
+				max = max_reduce(g, num_c, size, components, i);
+				for (int j = 0; j < k - temp.count(); ++j) {
+					if (max > tmp[j]) {
+						tmp[j] = max;
+						tmp2[j] = i;
+					}
+				}
+			}
+		}
+		for (int j = 0; j < k - temp.count(); ++j) {
+			temp.set(tmp2[j]);
+		}
+
+	}
+	num_c = get_components(g, temp, components);//vertex 0 isolated
+		//new cut
+		IloExpr newexpr(getEnv());
+		for (int i = 0; i < n_vertices; ++i) {
+			newexpr += Y[i];
+		}
+		for (int i = 0; i < Z.getSize(); ++i) {
+			if (temp.test(i))newexpr -= num_c * Z[i];
+		}
+		int tmp = -num_c * k + num_c;
+		//std::cout << (newexpr >= tmp) << std::endl;
+		addLocal(newexpr >= tmp).end();
+		newexpr.end();
+}
 ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVarMatrix,X ,int,k,graph_t&,g ) {
 	int size = Z.getSize();
 	int n_vertices = Y.getSize();
@@ -132,7 +237,7 @@ ILOLAZYCONSTRAINTCALLBACK5(MyLazyCall,IloBoolVarArray,Z,IloBoolVarArray,Y, IloVa
 		}
 		int tmp = -num_c * k + num_c;
 		//std::cout << (newexpr >= tmp) << std::endl;
-		add(newexpr>=tmp);
+		addLocal(newexpr>=tmp).end();
 		newexpr.end();
 	}
 }
@@ -144,6 +249,9 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 	IloEnv env = mod.getEnv();
 	int n_colors = Z.getSize();
 	typedef typename property_map<Graph, edge_color_t>::const_type ColorMap;
+	typedef typename graph_traits<Graph>::edge_iterator eit;
+	typedef typename graph_traits<Graph>::out_edge_iterator oit;
+	eit it, end;
 	ColorMap colors = get(edge_color, g);
 	//modelling objective function
 	IloExpr exp(env);
@@ -153,7 +261,7 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 		Y[i].setName(("y" + std::to_string(i)).c_str());
 	}
 	mod.add(IloMinimize(env, exp));
-	//mod.add(exp>=2);
+	mod.add(exp>=1);
 	exp.end();
 
 	for (int i = 0; i < n_vertices; ++i) {
@@ -178,22 +286,51 @@ void buildRepModel(IloModel mod, IloBoolVarArray Y, IloBoolVarArray Z, IloVarMat
 	//second constraint
 	IloExpr e2(env);
 	for (int u = 0; u < n_vertices; ++u) {
-		for (int v = 0; v<u; ++v) e2 += X[v][u];
+		for (int v = u+1; v<n_vertices; ++v) e2 += X[u][v];
 		e2 += Y[u];
-		mod.add(e2 == 1);
-		e2.clear();
 	}
+	mod.add(e2 ==num_vertices(g));
+	e2.clear();
 	e2.end();
 
 	//third constraint
 	//relaxed add as cuts
 
 	// new temporary constraints 
+	/*oit mit, mend;
+	std::unordered_set<int> coresU,coresV;
+	for (int u = 0; u < n_vertices; ++u) {
+		for (int v = u+1; v < n_vertices; ++v) {
+			IloExpr tempexpr(env);
+			std::tie(mit, mend) = out_edges(u, g);
+			while (mit != mend) {
+				coresU.insert(colors[*mit]);
+				++mit;
+			}
+			std::tie(mit, mend) = out_edges(v, g);
+			while (mit != mend) {
+				coresV.insert(colors[*mit]);
+				++mit;
+			}
+			for (auto cit = coresU.begin();cit!=coresU.end();++cit) {
+				tempexpr += Z[*cit];
+			}
+			mod.add(tempexpr >= X[u][v]);
+			tempexpr.clear();
+			for (auto cit = coresV.begin(); cit != coresV.end(); ++cit) {
+				tempexpr += Z[*cit];
+			}
+			mod.add(tempexpr >= X[u][v]);
+			tempexpr.end();
+		}
+
+	}*/
+
+
 
 	//constraint try to strength forest
 	IloExpr exptreecut(env);
-	typedef typename graph_traits<Graph>::edge_iterator eit;
-	eit it, end;
+
 	std::tie(it, end) = edges(g);
 	while (it != end) {
 		exptreecut += Z[colors[*it]];
@@ -227,8 +364,9 @@ void solveModel(int n_vertices, int n_colors, int k, Graph &g) {
 		IloCplex cplex(model);
 		cplex.exportModel("kSLF_rep.lp"); // good to see if the model is correct
 										  //cross your fingers
-		cplex.setParam(IloCplex::Param::Preprocessing::Presolve, 0);
+		//cplex.setParam(IloCplex::Param::Preprocessing::Presolve, 0);
 		cplex.use(MyLazyCall(env, Z, Y, X,k, g));
+		//cplex.use(MyUserCall(env, Z, Y, X, k, g));
 		cplex.setParam(IloCplex::Param::Threads, 4);//n threads
 		cplex.solve();
 		cplex.out() << "solution status = " << cplex.getStatus() << endl;
@@ -238,7 +376,7 @@ void solveModel(int n_vertices, int n_colors, int k, Graph &g) {
 		db temp(n_colors);
 		cplex.out() << "color(s) solution:";
 		for (int i = 0; i < Z.getSize(); i++) {
-			if (cplex.getValue(Z[i])) {
+			if (std::abs(cplex.getValue(Z[i]) - 1) <= 1e-3) {
 				temp.set(i);
 				cplex.out() << " " << i;
 			}
@@ -246,7 +384,7 @@ void solveModel(int n_vertices, int n_colors, int k, Graph &g) {
 		cplex.out() << endl;
 		cplex.out() << "root(s) solution:";
 		for (int i = 0; i < Y.getSize(); i++) {
-			if (cplex.getValue(Y[i])) {
+			if (std::abs(cplex.getValue(Y[i]) - 1) <= 1e-3) {
 				cplex.out() << " " << i;
 				/*for (int j = i + 1; j < n_vertices; j++) {
 					cplex.out() <<std::endl <<"X["<<i<<","<<j<<"]= " << cplex.getValue(X[i][j])<<std::endl;
